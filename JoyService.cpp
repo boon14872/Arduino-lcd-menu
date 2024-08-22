@@ -1,41 +1,8 @@
-#ifndef JOY_SERVICE_H
-#define JOY_SERVICE_H
+#include "JoyService.h"
 
-#define JOY_DEADZONE 30
-
-enum JoyDirection
+JoyService::JoyService(uint8_t x_pin, uint8_t y_pin, uint8_t button_pin) : x_pin(x_pin), y_pin(y_pin), button_pin(button_pin)
 {
-    JOY_LEFT,
-    JOY_RIGHT,
-    JOY_UP,
-    JOY_DOWN,
-    JOY_NONE,
-    JOY_PRESS
-};
-
-class JoyService
-{
-public:
-    JoyService(uint8_t x_pin, uint8_t y_pin, uint8_t button_pin) : x_pin(x_pin), y_pin(y_pin), button_pin(button_pin) {}
-
-    void init();
-    JoyDirection read();
-
-private:
-    uint8_t x_pin;
-    uint8_t y_pin;
-    uint8_t button_pin;
-
-    // Calibration values
-    int x_center;
-    int y_center;
-    int x_range;
-    int y_range;
-
-    // Filter variables
-    int x_filtered;
-    int y_filtered;
-};
+}
 
 void JoyService::init()
 {
@@ -106,4 +73,45 @@ JoyDirection JoyService::read()
     return JOY_NONE; // Should not happen with proper calibration
 }
 
-#endif // JOY_SERVICE_H
+
+void JoyService::calibrate()
+{
+    int x = analogRead(x_pin);
+    int y = analogRead(y_pin);
+
+    x_center = x;
+    y_center = y;
+
+    x_range = 0;
+
+    while (x_range < 100)
+    {
+        x = analogRead(x_pin);
+        if (abs(x - x_center) > x_range)
+        {
+            x_range = abs(x - x_center);
+        }
+    }
+
+    y_range = 0;
+
+    while (y_range < 100)
+    {
+        y = analogRead(y_pin);
+        if (abs(y - y_center) > y_range)
+        {
+            y_range = abs(y - y_center);
+        }
+    }
+
+    Serial.print("Calibrated x_center: ");
+    Serial.println(x_center);
+    Serial.print("Calibrated y_center: ");
+    Serial.println(y_center);
+
+    Serial.print("Calibrated x_range: ");
+    Serial.println(x_range);
+    Serial.print("Calibrated y_range: ");
+    Serial.println(y_range);
+    
+}

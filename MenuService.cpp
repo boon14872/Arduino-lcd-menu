@@ -1,58 +1,9 @@
-#include "joy_service.h"
-#include <LiquidCrystal_I2C.h>
+#include "MenuService.h"
 
-enum MenuOption
+MenuService::MenuService(uint8_t lcdAddr, uint8_t lcdCols, uint8_t lcdRows, uint8_t joyXPin, uint8_t joyYPin, uint8_t joyButtonPin, uint8_t relayPin) 
+    : lcd(lcdAddr, lcdCols, lcdRows), joy(joyXPin, joyYPin, joyButtonPin), relayPin(relayPin), currentState(STATE_MAIN_MENU), currentOption(MENU_GREEN_TEA), customTemperature(75), customTime(3), startTime(0), brewDuration(0), debounceDelay(1000), lastInputTime(0)
 {
-    MENU_GREEN_TEA,
-    MENU_BLACK_TEA,
-    MENU_CUSTOM,
-    MENU_START,
-    MENU_BACK,
-    MENU_STOP,
-    MENU_NONE
-};
-
-enum MenuState
-{
-    STATE_MAIN_MENU,
-    STATE_GREEN_TEA,
-    STATE_BLACK_TEA,
-    STATE_CUSTOM,
-    STATE_RUNNING
-};
-
-class MenuService
-{
-private:
-    LiquidCrystal_I2C lcd = LiquidCrystal_I2C(0x27, 16, 2);
-    JoyService joy = JoyService(A0, A1, 3);
-    const int relayPin = 7; // Pin connected to the relay
-
-    MenuState currentState = STATE_MAIN_MENU;
-    MenuOption currentOption = MENU_GREEN_TEA;
-
-    int customTemperature = 75;  // Default custom temperature
-    int customTime = 3;          // Default custom time (minutes)
-
-    unsigned long startTime = 0;       // Time when the brewing process starts
-    unsigned long brewDuration = 0;    // Duration of the brewing process in milliseconds
-    unsigned long debounceDelay = 1000; // Debounce delay in milliseconds
-    unsigned long lastInputTime = 0;   // Time of the last input
-
-    void displayMainMenu();
-    void displaySubMenu();
-    void displayProgress();
-    void handleInput();
-    void startBrew(int timeInMinutes);
-    void stopBrew();
-
-public:
-    void init();
-    void update();
-
-    void setup() { init(); }
-    void loop() { update(); }
-};
+}
 
 void MenuService::init()
 {
@@ -60,7 +11,7 @@ void MenuService::init()
     lcd.backlight();
     joy.init();
     pinMode(relayPin, OUTPUT);
-    digitalWrite(relayPin, LOW); // Ensure relay is off at the start
+    digitalWrite(relayPin, LOW);
 
     displayMainMenu();
 }
@@ -71,7 +22,6 @@ void MenuService::update()
 
     if (currentState == STATE_RUNNING)
     {
-        // Calculate remaining time
         unsigned long currentTime = millis();
         unsigned long elapsedTime = currentTime - startTime;
 
@@ -121,14 +71,20 @@ void MenuService::displaySubMenu()
         lcd.print("Black Tea");
         break;
     case STATE_CUSTOM:
-        lcd.print("Custom");
+        lcd.print("Custom: ");
+        lcd.print(customTime);
+        lcd.print(" min");
         break;
     default:
         break;
     }
 
     lcd.setCursor(0, 1);
-    if (currentOption == MENU_START)
+    if (currentState == STATE_CUSTOM && currentOption == MENU_SET_TIME)
+    {
+        lcd.print("> Set Time");
+    }
+    else if (currentOption == MENU_START)
     {
         lcd.print("> Start");
     }
@@ -141,28 +97,36 @@ void MenuService::displaySubMenu()
         lcd.print("> Stop");
     }
 }
+
+void MenuService::displaySetTime()
+{
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Set Time: ");
+    lcd.setCursor(0, 1);
+    lcd.print(customTime);
+    lcd.print(" min");
+}
 void MenuService::displayProgress()
 {
     static unsigned long lastDisplayTime = 0;
     unsigned long currentTime = millis();
 
-    if (currentTime - lastDisplayTime < 300)
+    if (currentTime - lastDisplayTime >= 200)
     {
-        return;
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Brewing...");
+
+        unsigned long remainingTime = (brewDuration - (currentTime - startTime)) / 1000;
+        lcd.setCursor(0, 1);
+        lcd.print("Time left: ");
+        lcd.print(remainingTime / 60);
+        lcd.print(":");
+        lcd.print(remainingTime % 60);
+
+        lastDisplayTime = currentTime;
     }
-
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Brewing...");
-
-    unsigned long remainingTime = (brewDuration - (currentTime - startTime)) / 1000;
-    lcd.setCursor(0, 1);
-    lcd.print("Time left: ");
-    lcd.print(remainingTime / 60);
-    lcd.print(":");
-    lcd.print(remainingTime % 60);
-
-    lastDisplayTime = currentTime;
 }
 
 void MenuService::handleInput()
@@ -175,6 +139,9 @@ void MenuService::handleInput()
     }
 
     JoyDirection dir = joy.read();
+    Serial.println(dir);
+
+
 
     if (currentState == STATE_MAIN_MENU)
     {
@@ -212,7 +179,7 @@ void MenuService::handleInput()
                 break;
             case MENU_CUSTOM:
                 currentState = STATE_CUSTOM;
-                currentOption = MENU_START;
+                currentOption = MENU_SET_TIME;
                 displaySubMenu();
                 break;
             default:
@@ -221,7 +188,55 @@ void MenuService::handleInput()
             lastInputTime = currentTime;
         }
     }
-    else if (currentState == STATE_GREEN_TEA || currentState == STATE_BLACK_TEA || currentState == STATE_CUSTOM)
+    else if (currentState == STATE_CUSTOM)
+    {
+        if (currentOption == MENU_SET_TIME)
+        {
+            if (dir == JOY_UP)
+            {
+                customTime++;
+                displaySetTime();
+                lastInputTime = currentTime;
+            }
+            else if (dir == JOY_DOWN)
+            {
+                customTime--;
+                if (customTime < 1) customTime = 1;
+                displaySetTime();
+                lastInputTime = currentTime;
+            }
+            else if (dir == JOY_PRESS)
+            {
+                currentOption = MENU_START;
+                displaySubMenu();
+                lastInputTime = currentTime;
+            }
+        }
+        else if (currentOption == MENU_START || currentOption == MENU_BACK)
+        {
+            if (dir == JOY_UP || dir == JOY_DOWN)
+            {
+                currentOption = (currentOption == MENU_START) ? MENU_BACK : MENU_START;
+                displaySubMenu();
+                lastInputTime = currentTime;
+            }
+            else if (dir == JOY_PRESS)
+            {
+                if (currentOption == MENU_BACK)
+                {
+                    currentState = STATE_MAIN_MENU;
+                    currentOption = MENU_GREEN_TEA;
+                    displayMainMenu();
+                }
+                else if (currentOption == MENU_START)
+                {
+                    startBrew(customTime);
+                }
+                lastInputTime = currentTime;
+            }
+        }
+    }
+    else if (currentState == STATE_GREEN_TEA || currentState == STATE_BLACK_TEA)
     {
         if (dir == JOY_UP || dir == JOY_DOWN)
         {
@@ -239,9 +254,7 @@ void MenuService::handleInput()
             }
             else if (currentOption == MENU_START)
             {
-                int brewTime = (currentState == STATE_GREEN_TEA) ? 1 :
-                               (currentState == STATE_BLACK_TEA) ? 1 :
-                               customTime;
+                int brewTime = (currentState == STATE_GREEN_TEA) ? GREEN_TEA_TIME : BLACK_TEA_TIME;
                 startBrew(brewTime);
             }
             lastInputTime = currentTime;
@@ -259,9 +272,9 @@ void MenuService::handleInput()
 
 void MenuService::startBrew(int timeInMinutes)
 {
-    brewDuration = timeInMinutes * 60000; // Convert minutes to milliseconds
+    brewDuration = timeInMinutes * 60000;
     startTime = millis();
-    digitalWrite(relayPin, HIGH); // Turn on the relay
+    digitalWrite(relayPin, HIGH);
     currentState = STATE_RUNNING;
     currentOption = MENU_STOP;
     displayProgress();
@@ -269,9 +282,8 @@ void MenuService::startBrew(int timeInMinutes)
 
 void MenuService::stopBrew()
 {
-    digitalWrite(relayPin, LOW); // Turn off the relay
+    digitalWrite(relayPin, LOW);
     currentState = STATE_MAIN_MENU;
     currentOption = MENU_GREEN_TEA;
     displayMainMenu();
-    // Optional: Add any cleanup code here
 }
