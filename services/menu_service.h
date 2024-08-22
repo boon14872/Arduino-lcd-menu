@@ -1,212 +1,277 @@
 #include "joy_service.h"
 #include <LiquidCrystal_I2C.h>
-#include "character.h"
+
+enum MenuOption
+{
+    MENU_GREEN_TEA,
+    MENU_BLACK_TEA,
+    MENU_CUSTOM,
+    MENU_START,
+    MENU_BACK,
+    MENU_STOP,
+    MENU_NONE
+};
+
+enum MenuState
+{
+    STATE_MAIN_MENU,
+    STATE_GREEN_TEA,
+    STATE_BLACK_TEA,
+    STATE_CUSTOM,
+    STATE_RUNNING
+};
+
 class MenuService
 {
 private:
     LiquidCrystal_I2C lcd = LiquidCrystal_I2C(0x27, 16, 2);
-    JoyService joy = JoyService(A0, A1, A2);
+    JoyService joy = JoyService(A0, A1, 3);
+    const int relayPin = 7; // Pin connected to the relay
 
-    String menu_name;
+    MenuState currentState = STATE_MAIN_MENU;
+    MenuOption currentOption = MENU_GREEN_TEA;
 
-    int menu_page_curr;
-    int menu_page_prev;
-    int menu_page_total;
-    JoyDirection button_type;
-    int animation_speed;
-    int button_delay;
+    int customTemperature = 75;  // Default custom temperature
+    int customTime = 3;          // Default custom time (minutes)
+
+    unsigned long startTime = 0;       // Time when the brewing process starts
+    unsigned long brewDuration = 0;    // Duration of the brewing process in milliseconds
+    unsigned long debounceDelay = 1000; // Debounce delay in milliseconds
+    unsigned long lastInputTime = 0;   // Time of the last input
+
+    void displayMainMenu();
+    void displaySubMenu();
+    void displayProgress();
+    void handleInput();
+    void startBrew(int timeInMinutes);
+    void stopBrew();
 
 public:
-    MenuService()
-    {
-        menu_name = "Main Menu";
-        menu_page_curr = 1;
-        menu_page_prev = 1;
-        menu_page_total = 4;
-        button_type = JOY_NONE;
-        animation_speed = 250;
-        button_delay = 250;
-        initializeCharacters();
-    }
+    void init();
+    void update();
 
-    void initChars()
-    {
-        lcd.createChar(0, chr_arrowleft);
-        lcd.createChar(1, chr_arrowright);
-        lcd.createChar(2, chr_arrowup);
-        lcd.createChar(3, chr_arrowdown);
-        lcd.createChar(4, chr_slash);
-        lcd.createChar(5, chr_indleft);
-        lcd.createChar(6, chr_indright);
-        lcd.createChar(7, chr_plus);
-        lcd.createChar(8, chr_minus);
-    }
+    void setup() { init(); }
+    void loop() { update(); }
+};
 
-    void initLCD()
-    {
-        lcd.init();
-        lcd.backlight();
-        lcd.clear();
+void MenuService::init()
+{
+    lcd.init();
+    lcd.backlight();
+    joy.init();
+    pinMode(relayPin, OUTPUT);
+    digitalWrite(relayPin, LOW); // Ensure relay is off at the start
 
-        initChars();
-        printStr(menu_name, 0, 0);
-    }
+    displayMainMenu();
+}
 
-    void printStr(String text, int index, int line)
+void MenuService::update()
+{
+    handleInput();
+
+    if (currentState == STATE_RUNNING)
     {
-        if (text.length() > 16)
+        // Calculate remaining time
+        unsigned long currentTime = millis();
+        unsigned long elapsedTime = currentTime - startTime;
+
+        if (elapsedTime >= brewDuration)
         {
-            lcd.setCursor(0, 0);
-            lcd.print(text);
-            lcd.setCursor(0, 1);
-            lcd.print(text.substring(17, text.length()));
+            stopBrew();
         }
         else
         {
-            lcd.setCursor(index, line);
-            lcd.print(text);
+            displayProgress();
         }
     }
+}
 
-    void printChr(int character, int index, int line)
+void MenuService::displayMainMenu()
+{
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Select Tea:");
+    lcd.setCursor(0, 1);
+    switch (currentOption)
     {
-        lcd.setCursor(index, line);
-        lcd.write(character);
+    case MENU_GREEN_TEA:
+        lcd.print("> Green Tea");
+        break;
+    case MENU_BLACK_TEA:
+        lcd.print("> Black Tea");
+        break;
+    case MENU_CUSTOM:
+        lcd.print("> Custom");
+        break;
+    default:
+        break;
+    }
+}
+
+void MenuService::displaySubMenu()
+{
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    switch (currentState)
+    {
+    case STATE_GREEN_TEA:
+        lcd.print("Green Tea");
+        break;
+    case STATE_BLACK_TEA:
+        lcd.print("Black Tea");
+        break;
+    case STATE_CUSTOM:
+        lcd.print("Custom");
+        break;
+    default:
+        break;
     }
 
-    void clearLine(int line)
+    lcd.setCursor(0, 1);
+    if (currentOption == MENU_START)
     {
-        lcd.setCursor(0, line);
-        lcd.print("                ");
+        lcd.print("> Start");
+    }
+    else if (currentOption == MENU_BACK)
+    {
+        lcd.print("> Back");
+    }
+    else if (currentOption == MENU_STOP)
+    {
+        lcd.print("> Stop");
+    }
+}
+void MenuService::displayProgress()
+{
+    static unsigned long lastDisplayTime = 0;
+    unsigned long currentTime = millis();
+
+    if (currentTime - lastDisplayTime < 300)
+    {
+        return;
     }
 
-    void loadingAnimation(String text)
-    {
-        int text_length = text.length();
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Brewing...");
 
-        if (text_length > 13)
+    unsigned long remainingTime = (brewDuration - (currentTime - startTime)) / 1000;
+    lcd.setCursor(0, 1);
+    lcd.print("Time left: ");
+    lcd.print(remainingTime / 60);
+    lcd.print(":");
+    lcd.print(remainingTime % 60);
+
+    lastDisplayTime = currentTime;
+}
+
+void MenuService::handleInput()
+{
+    unsigned long currentTime = millis();
+
+    if (currentTime - lastInputTime < debounceDelay)
+    {
+        return;
+    }
+
+    JoyDirection dir = joy.read();
+
+    if (currentState == STATE_MAIN_MENU)
+    {
+        if (dir == JOY_UP)
         {
-            printStr(String("Loading"), 0, 1);
-            delay(animation_speed * 4);
+            if (currentOption == MENU_GREEN_TEA)
+                currentOption = MENU_CUSTOM;
+            else
+                currentOption = static_cast<MenuOption>(currentOption - 1);
+            displayMainMenu();
+            lastInputTime = currentTime;
         }
-        else
+        else if (dir == JOY_DOWN)
         {
-            while (true)
+            if (currentOption == MENU_CUSTOM)
+                currentOption = MENU_GREEN_TEA;
+            else
+                currentOption = static_cast<MenuOption>(currentOption + 1);
+            displayMainMenu();
+            lastInputTime = currentTime;
+        }
+        else if (dir == JOY_PRESS)
+        {
+            switch (currentOption)
             {
-                printStr(text, 0, 1);
-                delay(animation_speed);
-
-                printStr(text, 0, 1);
-                printStr(String("."), text_length, 1);
-                delay(animation_speed);
-
-                printStr(text, 0, 1);
-                printStr(String(".."), text_length, 1);
-                delay(animation_speed);
-
-                printStr(text, 0, 1);
-                printStr(String("..."), text_length, 1);
-                delay(animation_speed);
-
-                clearLine(1);
+            case MENU_GREEN_TEA:
+                currentState = STATE_GREEN_TEA;
+                currentOption = MENU_START;
+                displaySubMenu();
+                break;
+            case MENU_BLACK_TEA:
+                currentState = STATE_BLACK_TEA;
+                currentOption = MENU_START;
+                displaySubMenu();
+                break;
+            case MENU_CUSTOM:
+                currentState = STATE_CUSTOM;
+                currentOption = MENU_START;
+                displaySubMenu();
+                break;
+            default:
                 break;
             }
+            lastInputTime = currentTime;
         }
     }
-
-    void printMenu()
+    else if (currentState == STATE_GREEN_TEA || currentState == STATE_BLACK_TEA || currentState == STATE_CUSTOM)
     {
-        clearLine(1);
-        printChr(2, 13, 1);
-        printChr(4, 14, 1);
-        printChr(3, 15, 1);
-        switch (menu_page_curr)
+        if (dir == JOY_UP || dir == JOY_DOWN)
         {
-        case 1:
-            printStr(menu_feature[0][0], 0, 1);
-            break;
-        case 2:
-            printStr(menu_feature[1][0], 0, 1);
-            break;
-        case 3:
-            printStr(menu_feature[2][0], 0, 1);
-            break;
-        case 4:
-            printStr(menu_feature[3][0], 0, 1);
-            break;
+            currentOption = (currentOption == MENU_START) ? MENU_BACK : MENU_START;
+            displaySubMenu();
+            lastInputTime = currentTime;
         }
-    }
-
-    void printFeatures()
-    {
-        clearLine(1);
-        printChr(8, 15, 1);
-        switch (menu_page_curr)
+        else if (dir == JOY_PRESS)
         {
-        case 1:
-            printStr(menu_feature[0][1], 0, 1);
-            break;
-        case 2:
-            printStr(menu_feature[1][1], 0, 1);
-            break;
-        case 3:
-            printStr(menu_feature[2][1], 0, 1);
-            break;
-        case 4:
-            printStr(menu_feature[3][1], 0, 1);
-            break;
-        }
-    }
-
-    void menuLogic()
-    {
-        Serial.print("Button: ");
-        Serial.println(button_type);
-        switch (button_type)
-        {
-        case JOY_DOWN:
-            menu_page_curr = (menu_page_curr % menu_page_total) + 1;
-            delay(button_delay);
-            break;
-        case JOY_UP:
-            menu_page_curr = (menu_page_curr - 2 + menu_page_total) % menu_page_total + 1;
-            delay(button_delay);
-            break;
-        case JOY_LEFT:
-            printStr(button_name[0], 0, 1);
-            delay(button_delay);
-            break;
-        case JOY_RIGHT:
-            printStr(button_name[1], 0, 1);
-            delay(button_delay);
-            break;
-        default:
-            if (button_type == JOY_PRESS)
+            if (currentOption == MENU_BACK)
             {
-                printFeatures();
-                delay(button_delay);
+                currentState = STATE_MAIN_MENU;
+                currentOption = MENU_GREEN_TEA;
+                displayMainMenu();
             }
-            break;
+            else if (currentOption == MENU_START)
+            {
+                int brewTime = (currentState == STATE_GREEN_TEA) ? 1 :
+                               (currentState == STATE_BLACK_TEA) ? 1 :
+                               customTime;
+                startBrew(brewTime);
+            }
+            lastInputTime = currentTime;
         }
-
-        if (menu_page_curr != menu_page_prev)
+    }
+    else if (currentState == STATE_RUNNING)
+    {
+        if (dir == JOY_PRESS && currentOption == MENU_STOP)
         {
-            printMenu();
-            menu_page_prev = menu_page_curr;
+            stopBrew();
+            lastInputTime = currentTime;
         }
     }
+}
 
-    void setup()
-    {
-        initLCD();
-        joy.init();
-        loadingAnimation(String("Setup"));
-        printMenu();
-    }
+void MenuService::startBrew(int timeInMinutes)
+{
+    brewDuration = timeInMinutes * 60000; // Convert minutes to milliseconds
+    startTime = millis();
+    digitalWrite(relayPin, HIGH); // Turn on the relay
+    currentState = STATE_RUNNING;
+    currentOption = MENU_STOP;
+    displayProgress();
+}
 
-    void loop()
-    {
-        button_type = joy.read();
-        menuLogic();
-    }
-};
+void MenuService::stopBrew()
+{
+    digitalWrite(relayPin, LOW); // Turn off the relay
+    currentState = STATE_MAIN_MENU;
+    currentOption = MENU_GREEN_TEA;
+    displayMainMenu();
+    // Optional: Add any cleanup code here
+}

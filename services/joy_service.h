@@ -43,16 +43,17 @@ void JoyService::init()
     pinMode(y_pin, INPUT);
     pinMode(button_pin, INPUT);
 
-    // Calibrate joystick (replace with your calibration logic)
+    // Calibrate joystick
     x_center = 512;
     y_center = 512;
-    x_range = 400;
-    y_range = 400;
+    x_range = 200; // Corresponds to ±100 range
+    y_range = 200; // Corresponds to ±100 range
 
     // Initialize filter values
     x_filtered = x_center;
     y_filtered = y_center;
 }
+
 JoyDirection JoyService::read()
 {
     int x = analogRead(x_pin);
@@ -62,11 +63,21 @@ JoyDirection JoyService::read()
     int y = analogRead(y_pin);
     Serial.println(y);
 
-    bool button = analogRead(button_pin) == 0; // Adjust threshold as needed
+    bool button = digitalRead(button_pin);
+    Serial.print("button: ");
+
+    Serial.println(digitalRead(button_pin));
 
     // Filter readings
     x_filtered = (x_filtered * 9 + x) / 10; // Simple moving average filter
     y_filtered = (y_filtered * 9 + y) / 10;
+
+    Serial.print("button: ");
+    Serial.println(button);
+    if (button == 1)
+    {
+        return JOY_PRESS;
+    }
 
     // Apply dead zone
     if (abs(x_filtered - x_center) < JOY_DEADZONE && abs(y_filtered - y_center) < JOY_DEADZONE)
@@ -90,12 +101,6 @@ JoyDirection JoyService::read()
     else if (y_filtered > y_center + y_range / 2)
     {
         return JOY_UP;
-    }
-
-    Serial.println(button);
-    if (button == 0)
-    {
-        return JOY_PRESS;
     }
 
     return JOY_NONE; // Should not happen with proper calibration
